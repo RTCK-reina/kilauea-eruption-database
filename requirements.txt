@@ -1,0 +1,3 @@
+# No third-party dependencies.
+# The collectors run unattended from cron on a system Python that may have
+# nothing installed, so everything uses the standard library.
