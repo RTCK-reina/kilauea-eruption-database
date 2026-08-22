@@ -185,7 +185,7 @@ def run(conn) -> list[dict]:
         WHERE station='UWD' AND deflation_urad IS NOT NULL""")
     eps_total = _one(conn, "SELECT COUNT(*) FROM episode")
     check("tilt_reading: per-episode deflation coverage", "PASS" if eps_defl else "WARN",
-          f"{eps_defl}/{eps_total} エピソード")
+          f"{eps_defl}/{eps_total} episodes")
 
     # A recovery fraction far above 1 means the deflation and the re-inflation
     # came from different instruments or different episodes.
@@ -193,7 +193,7 @@ def run(conn) -> list[dict]:
         SELECT COUNT(*) FROM v_episode_tilt_notice
         WHERE recovery_fraction > 1.6 OR recovery_fraction < 0""")
     check("tilt_reading: recovery fraction plausible", "PASS" if not odd else "WARN",
-          f"{odd} エピソードが 0〜1.6 の外")
+          f"{odd} episodes outside 0..1.6")
 
     # --- VONA cross-check ----------------------------------------------------------
     n_vona = _one(conn, "SELECT COUNT(*) FROM vona")
@@ -219,13 +219,15 @@ def run(conn) -> list[dict]:
         ORDER BY v.episode_no""")
     check("vona: STARTED onset vs the episode table",
           "PASS" if not disagree else "WARN",
-          f"{agree}/{checked} が60分以内"
-          + ("; " + ", ".join(f"ep{r['episode_no']}が{r['h']:+.1f}時間ずれ" for r in disagree[:5])
-             + "（上流のONSET欄の揺れ。エピソード表を正とする）" if disagree else ""))
+          f"{agree}/{checked} within 60 minutes"
+          + ("; " + ", ".join(f"ep{r['episode_no']} off by {r['h']:+.1f} h"
+                              for r in disagree[:5])
+             + " (upstream ONSET wobble; the episode table is authoritative)"
+             if disagree else ""))
 
     multi = _one(conn, "SELECT COUNT(*) FROM v_vona_episode WHERE distinct_onsets > 1")
     check("vona: onset values consistent within an episode", "PASS",
-          f"{multi} エピソードでメッセージ間に食い違いあり（v_vona_episode で個別に確認できる）")
+          f"{multi} episodes disagree between messages (inspect them in v_vona_episode)")
 
     # --- GNSS -----------------------------------------------------------------
     # Reporting commands open read-only and therefore cannot migrate. Say so
@@ -233,8 +235,8 @@ def run(conn) -> list[dict]:
     gnss_cols = {r[1] for r in conn.execute("PRAGMA table_info(gnss_position)")}
     if "up_abs_m" not in gnss_cols:
         check("gnss: schema up to date", "FAIL" if gnss_cols else "WARN",
-              "up_abs_m 列が無い。`python3 -m kilauea init` を一度実行して移行すること"
-              if gnss_cols else "gnss_position テーブルが無い")
+              "no up_abs_m column; run `python3 -m kilauea init` once to migrate"
+              if gnss_cols else "no gnss_position table")
         return out
 
     n_g = _one(conn, "SELECT COUNT(*) FROM gnss_position")
@@ -243,7 +245,7 @@ def run(conn) -> list[dict]:
         SELECT ROUND(julianday('now') - julianday(MAX(date_utc)), 1) FROM gnss_position""")
     check("gnss: rows present", "PASS" if n_g else "WARN",
           f"{n_g:,} rows"
-          + (f", {span[0]['a']} .. {span[0]['b']}, 遅延 {lag} 日" if n_g and span else ""))
+          + (f", {span[0]['a']} .. {span[0]['b']}, {lag} day lag" if n_g and span else ""))
 
     # Regression guard. NGL's final and rapid series use different integer
     # references, so a day-to-day step of a metre means the raw offsets are
@@ -257,7 +259,7 @@ def run(conn) -> list[dict]:
     check("gnss: no metre-scale steps between consecutive days",
           "PASS" if not jumps else "FAIL",
           "; ".join(f"{r['station']} {r['date_utc']} {r['step_mm']:.0f}mm" for r in jumps)
-          or "段差なし（final/rapid の基準差は up_abs_m で吸収済み）")
+          or "no steps (the final/rapid reference difference is absorbed by up_abs_m)")
 
     no_abs = _one(conn, "SELECT COUNT(*) FROM gnss_position WHERE up_abs_m IS NULL")
     check("gnss: absolute positions computed", "PASS" if not no_abs else "FAIL",
@@ -270,7 +272,7 @@ def run(conn) -> list[dict]:
         FROM park_status""")
     check("park: status fetched", "PASS" if n_park else "WARN",
           f"{n_park} rows"
-          + (f", 最終取得は {park_age} 日前" if park_age is not None else ""))
+          + (f", last fetched {park_age} days ago" if park_age is not None else ""))
 
     n_brief = _one(conn, "SELECT COUNT(*) FROM brief_run")
     check("brief_run: rows present", "PASS" if n_brief else "WARN",

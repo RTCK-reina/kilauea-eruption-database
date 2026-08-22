@@ -1,15 +1,18 @@
 # Kīlauea eruption database
 
+[![tests](https://github.com/RTCK-reina/kilauea-eruption-database/actions/workflows/tests.yml/badge.svg)](https://github.com/RTCK-reina/kilauea-eruption-database/actions/workflows/tests.yml)
+
 A reproducible SQLite database of Kīlauea eruption, deformation, seismicity and
 gas data, assembled from public USGS and Smithsonian sources, with feature views
 built for three forecasting targets.
 
 ```
 python3 -m kilauea init            # create schema + views
-python3 -m kilauea collect all     # full build (~40 min, ~6 GB)
+python3 -m kilauea collect all     # full build (~40 min, ~4.3 GB)
 python3 -m kilauea update          # daily incremental refresh
 python3 -m kilauea validate        # data integrity report
 python3 -m kilauea status          # row counts and time coverage
+python3 -m kilauea core-db         # derive the distributable core database
 ```
 
 Requires Python 3.9+ and SQLite 3.28+. **No third-party packages**: the
@@ -27,7 +30,7 @@ and the 10-second SO2 stream. Everything else is identical, including all views,
 `tilt_hourly`, and the HVO forecast benchmark.
 
 ```
-gunzip -k data/kilauea_core.db.gz          # 38 MB -> 181 MB, once
+gunzip -k data/kilauea_core.db.gz          # 38 MB -> 172 MB, once
 python3 -m kilauea status   --db data/kilauea_core.db
 python3 -m kilauea baseline --db data/kilauea_core.db
 ```
@@ -35,6 +38,24 @@ python3 -m kilauea baseline --db data/kilauea_core.db
 GitHub blocks files over 100 MiB, so the database is stored compressed and
 `data/kilauea_core.db` itself is gitignored — decompressing it will not dirty
 the working tree.
+
+"Core" is a derivation, not a separate build. `core-db` copies a full database,
+deletes exactly two things, VACUUMs, and refuses to write the result unless
+every other table came through with its row count unchanged:
+
+```
+python3 -m kilauea core-db --db data/kilauea.db -o data/kilauea_core.db --force
+gzip -9 -c data/kilauea_core.db > data/kilauea_core.db.gz
+```
+
+The two are `tilt_sample` in full, and the rows of `so2_emission` where
+`aggregation = 'individual' AND method = 'FLYSPEC array'` — the 10-second
+stream. The traverse and daily-mean SO2 figures stay, as does `tilt_hourly`.
+Refreshing the shipped archive means re-running those two commands, so the core
+build can never drift away from a full one by hand. Do it sparingly: the
+archive is a 38 MB binary and every refresh adds that much to the git history
+permanently. CI decompresses whatever is committed and opens it on every push,
+so a stale or corrupt archive fails the build rather than reaching a user.
 
 ### The full database
 
@@ -44,7 +65,7 @@ need raw tilt at native resolution; the hourly aggregate in the core database
 covers the feature views.
 
 If you would rather not wait for the collectors, the same build is attached to
-the latest release: gzipped (4.0 GB to 565 MB) and split into 500 MB parts, so a
+the latest release: gzipped (4.3 GB to 565 MB) and split into 500 MB parts, so a
 failed transfer costs one part rather than the whole file.
 
 ```
@@ -282,6 +303,11 @@ lives under a protected folder (Documents, Desktop, iCloud Drive); a path under
 it.
 
 ## The daily HTML brief
+
+The brief is written in Japanese; `kilauea/brief.py` and
+`briefs/BRIEF_PROMPT.md` are the only Japanese in the repository, and that is
+deliberate — it is the author's own morning read, not project documentation.
+Everything the database and the CLI emit is English.
 
 The brief is split so that each half runs where it can:
 

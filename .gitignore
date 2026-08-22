@@ -4,6 +4,8 @@ data/*.db
 data/*.db-wal
 data/*.db-shm
 data/*.db-journal
+data/*.partial
+data/*.partial-*
 data/raw/
 data/digests/
 data/.*

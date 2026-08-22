@@ -39,3 +39,13 @@ LOG="logs/update_${STAMP}.log"
 # Keep a month of run logs and contexts; the database is the durable artefact.
 find logs   -name 'update_*.log'   -mtime +30 -delete
 find briefs -name 'context_2*.json' -mtime +60 -delete
+
+# The archive committed to the repository is a snapshot, so it is behind the
+# database by design and there is nothing to say most days. Past a month the
+# gap is worth closing, or people are cloning a stale database.
+CORE_GZ=data/kilauea_core.db.gz
+if [ -f "$CORE_GZ" ] && [ -n "$(find "$CORE_GZ" -mtime +30 2>/dev/null)" ]; then
+    printf 'note: %s is over 30 days old. Refresh it with:\n' "$CORE_GZ"
+    printf '  %s -m kilauea core-db --db data/kilauea.db -o data/kilauea_core.db --force\n' "$PY"
+    printf '  gzip -9 -c data/kilauea_core.db > %s\n' "$CORE_GZ"
+fi

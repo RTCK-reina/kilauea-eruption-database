@@ -7,6 +7,7 @@
     python -m kilauea views                rebuild analysis views
     python -m kilauea validate             data integrity report
     python -m kilauea status               row counts and coverage
+    python -m kilauea core-db              derive the shipped core database
 """
 from __future__ import annotations
 
@@ -16,7 +17,7 @@ import sqlite3
 import sys
 import time
 
-from . import baseline, brief, config, db, forecast, validate as validate_mod
+from . import baseline, brief, config, core, db, forecast, validate as validate_mod
 from .sources import (episodes, gnss, gravity, gvp, hans, park, plume, quakes,
                       so2, thermal, tilt, tilt_notice, vona)
 
@@ -143,6 +144,13 @@ def main(argv=None) -> int:
     v.add_argument("--strict", action="store_true",
                    help="exit non-zero when any check fails")
 
+    cd = sub.add_parser("core-db", parents=[common],
+                        help="derive the distributable core database from a full build")
+    cd.add_argument("-o", "--out", default="data/kilauea_core.db",
+                    help="where to write it (default: data/kilauea_core.db)")
+    cd.add_argument("--force", action="store_true",
+                    help="overwrite the output if it already exists")
+
     args = ap.parse_args(argv)
     _check_runtime()
     _setup_logging(args.verbose)
@@ -154,7 +162,7 @@ def main(argv=None) -> int:
 
     # Reporting commands must not conjure an empty database when the path is
     # wrong - that turns a typo into a silent "0 rows" answer.
-    read_only = args.cmd in {"status", "validate", "baseline"} or (
+    read_only = args.cmd in {"status", "validate", "baseline", "core-db"} or (
         args.cmd == "brief-context" and not args.record)
     if read_only or args.cmd in {"views", "brief-context"}:
         if not Path(config.DB_PATH).exists():
@@ -224,6 +232,9 @@ def main(argv=None) -> int:
         if args.cmd == "status":
             print_status(conn)
             return 0
+
+        if args.cmd == "core-db":
+            return core.derive(conn, args.out, force=args.force)
 
         if args.cmd == "validate":
             report = validate_mod.run(conn)

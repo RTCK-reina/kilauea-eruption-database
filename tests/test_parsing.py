@@ -440,6 +440,82 @@ def test_tilt_stale_1sec_filter_is_valid_sql():
     assert n == 1, n
 
 
+def _fake_full_build(path):
+    """A miniature stand-in for a `collect all` database."""
+    conn = sqlite3.connect(path)
+    # WAL like the real thing, so the derivation has something to convert.
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("CREATE TABLE tilt_sample (station TEXT)")
+    conn.executemany("INSERT INTO tilt_sample VALUES (?)", [("UWD",)] * 7)
+    conn.execute("CREATE TABLE so2_emission (aggregation TEXT, method TEXT)")
+    conn.executemany(
+        "INSERT INTO so2_emission VALUES (?, ?)",
+        [("individual", "FLYSPEC array")] * 5          # the 10-second stream
+        + [("individual", "DOAS traverse"),            # a traverse figure
+           ("daily_mean", "FLYSPEC array")],           # a daily mean
+    )
+    conn.execute("CREATE TABLE episode (episode_no INTEGER)")
+    conn.executemany("INSERT INTO episode VALUES (?)", [(1,), (2,), (3,)])
+    conn.commit()
+    return conn
+
+
+def test_core_db_drops_only_the_two_bulk_series():
+    import tempfile
+    from kilauea import core
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = _fake_full_build(os.path.join(tmp, "full.db"))
+        dest = os.path.join(tmp, "core.db")
+        core.derive(src, dest)
+
+        # What ships is one file: check before opening it, because opening a
+        # database is what creates the sidecars in the first place.
+        for suffix in ("-wal", "-shm", "-journal"):
+            assert not os.path.exists(dest + suffix), dest + suffix
+        assert not os.path.exists(dest + ".partial"), "left a partial behind"
+
+        out = sqlite3.connect(dest)
+        try:
+            assert out.execute("PRAGMA journal_mode").fetchone()[0] == "delete"
+            assert out.execute("SELECT COUNT(*) FROM tilt_sample").fetchone()[0] == 0
+            # The traverse and daily-mean rows are not the stream and must stay.
+            assert out.execute("SELECT COUNT(*) FROM so2_emission").fetchone()[0] == 2
+            assert out.execute("SELECT COUNT(*) FROM episode").fetchone()[0] == 3
+        finally:
+            out.close()
+            src.close()
+
+
+def test_core_db_refuses_to_clobber_and_refuses_a_partial_build():
+    import tempfile
+    from kilauea import core
+
+    with tempfile.TemporaryDirectory() as tmp:
+        src = _fake_full_build(os.path.join(tmp, "full.db"))
+        dest = os.path.join(tmp, "core.db")
+        core.derive(src, dest)
+        try:
+            core.derive(src, dest)
+        except SystemExit as exc:
+            assert "--force" in str(exc), exc
+        else:
+            raise AssertionError("overwrote an existing database without --force")
+        core.derive(src, dest, force=True)      # explicit is fine
+        src.close()
+
+        partial = sqlite3.connect(os.path.join(tmp, "partial.db"))
+        partial.execute("CREATE TABLE episode (episode_no INTEGER)")
+        partial.commit()
+        try:
+            core.derive(partial, os.path.join(tmp, "out.db"))
+        except SystemExit as exc:
+            assert "tilt_sample" in str(exc), exc
+        else:
+            raise AssertionError("accepted a database with no tilt_sample table")
+        partial.close()
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
