@@ -48,9 +48,11 @@ the latest release, gzipped and split into parts (a single GitHub asset cannot
 exceed 2 GiB):
 
 ```
-gh release download full-db-latest -R RTCK-reina/kilauea-eruption-database -p 'kilauea.db.gz.part*'
+gh release download -R RTCK-reina/kilauea-eruption-database \
+    -p 'kilauea.db.gz.part*' -p 'SHA256SUMS.txt'
+shasum -a 256 -c SHA256SUMS.txt            # verify the parts before joining
 cat kilauea.db.gz.part* | gunzip > data/kilauea.db
-shasum -a 256 -c SHA256SUMS.txt            # optional, downloaded with the parts
+sqlite3 data/kilauea.db 'PRAGMA quick_check;'
 python3 -m kilauea status --db data/kilauea.db
 ```
 
