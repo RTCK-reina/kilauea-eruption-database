@@ -129,6 +129,13 @@ def _station_meta(zf: zipfile.ZipFile, station: str, sensor: str) -> dict:
     return meta
 
 
+# The 1 Hz files land with a ``segment`` ending in ``_1sec``. The underscore
+# is a LIKE wildcard, so it has to be escaped -- and the backslash has to
+# survive Python's own escaping, hence the raw string. Written as a plain
+# string this collapses to ``ESCAPE ''`` and SQLite rejects the statement.
+_STALE_1SEC_WHERE = r"segment LIKE '%\_1sec%' ESCAPE '\'"
+
+
 def collect(conn, *, items: list[str] | None = None, include_1sec: bool = False, **_) -> None:
     """Ingest tiltmeter releases.
 
@@ -143,14 +150,14 @@ def collect(conn, *, items: list[str] | None = None, include_1sec: bool = False,
             # Keep the table consistent with the requested configuration even if
             # an earlier run (or an interrupted one) ingested the 1 Hz files.
             stale = conn.execute(
-                "SELECT COUNT(*) FROM tilt_sample WHERE segment LIKE '%\_1sec%' ESCAPE '\'"
+                "SELECT COUNT(*) FROM tilt_sample WHERE " + _STALE_1SEC_WHERE
             ).fetchone()[0]
             if stale:
                 log.warning("tilt: removing %d 1 Hz samples left by a previous run "
                             "(include_1sec is off)", stale)
                 with db.tx(conn):
                     conn.execute(
-                        "DELETE FROM tilt_sample WHERE segment LIKE '%\_1sec%' ESCAPE '\'")
+                        "DELETE FROM tilt_sample WHERE " + _STALE_1SEC_WHERE)
         seen = 0
         for item_id in items:
             meta = sciencebase.item(item_id)

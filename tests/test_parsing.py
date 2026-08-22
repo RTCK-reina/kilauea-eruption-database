@@ -418,6 +418,28 @@ def test_gnss_ignores_other_stations_in_the_same_file():
     assert parse_tenv3(text, "UWEV", "final", "PA", "now") == []
 
 
+def test_tilt_stale_1sec_filter_is_valid_sql():
+    """The 1 Hz cleanup predicate must survive Python escaping and reach SQLite.
+
+    Written as a plain string the ESCAPE clause collapses to ``ESCAPE ''`` and
+    every ``collect tilt`` run without ``--include-1sec`` dies with
+    "ESCAPE expression must be a single character".
+    """
+    from kilauea.sources.tilt import _STALE_1SEC_WHERE
+
+    conn = sqlite3.connect(":memory:")
+    conn.execute("CREATE TABLE tilt_sample (segment TEXT)")
+    conn.executemany(
+        "INSERT INTO tilt_sample VALUES (?)",
+        [("UWE_1sec_2018",), ("UWE_1min_2018",), ("UWEX1secY",)],
+    )
+    n = conn.execute(
+        "SELECT COUNT(*) FROM tilt_sample WHERE " + _STALE_1SEC_WHERE
+    ).fetchone()[0]
+    # UWEX1secY is the guard: without ESCAPE the underscore matches any char.
+    assert n == 1, n
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
