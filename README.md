@@ -44,8 +44,8 @@ need raw tilt at native resolution; the hourly aggregate in the core database
 covers the feature views.
 
 If you would rather not wait for the collectors, the same build is attached to
-the latest release, gzipped and split into parts (a single GitHub asset cannot
-exceed 2 GiB):
+the latest release: gzipped (4.0 GB to 565 MB) and split into 500 MB parts, so a
+failed transfer costs one part rather than the whole file.
 
 ```
 gh release download -R RTCK-reina/kilauea-eruption-database \
