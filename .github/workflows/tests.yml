@@ -1,0 +1,80 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # 3.9 is macOS stock, which the collectors have to keep running on.
+        python-version: ["3.9", "3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: No compile-time warnings in any module
+        # An invalid escape sequence is a DeprecationWarning up to 3.11 and a
+        # SyntaxWarning from 3.12, so neither filter alone catches it on every
+        # version. Compiling each file with warnings recorded does.
+        run: |
+          python3 - <<'PY'
+          import glob, warnings
+          bad = []
+          files = sorted(
+              glob.glob("kilauea/**/*.py", recursive=True)
+              + glob.glob("scripts/*.py")
+              + glob.glob("tests/*.py")
+          )
+          for f in files:
+              with warnings.catch_warnings(record=True) as caught:
+                  warnings.simplefilter("always")
+                  compile(open(f, encoding="utf-8").read(), f, "exec")
+                  bad += ["%s:%s %s" % (f, w.lineno, w.message) for w in caught]
+          if bad:
+              raise SystemExit("\n".join(bad))
+          print("%d files, no compile-time warnings" % len(files))
+          PY
+
+      - name: Every module imports cleanly
+        run: |
+          python3 -W error::SyntaxWarning - <<'PY'
+          import importlib, pkgutil
+          import kilauea, kilauea.sources
+          for pkg in (kilauea, kilauea.sources):
+              for m in pkgutil.iter_modules(pkg.__path__):
+                  if m.name == "__main__":      # importing it runs the CLI
+                      continue
+                  importlib.import_module(pkg.__name__ + "." + m.name)
+          print("all modules import clean")
+          PY
+
+      - name: Unit tests
+        run: python3 tests/test_parsing.py
+
+      - name: The shipped core database decompresses, opens and reports
+        run: |
+          gunzip -k data/kilauea_core.db.gz
+          python3 - <<'PY'
+          import sqlite3
+          c = sqlite3.connect("file:data/kilauea_core.db?mode=ro", uri=True)
+          assert c.execute("PRAGMA quick_check").fetchone()[0] == "ok"
+          n = c.execute("SELECT COUNT(*) FROM episode").fetchone()[0]
+          v = c.execute("SELECT COUNT(*) FROM sqlite_master WHERE type='view'").fetchone()[0]
+          assert n > 0 and v > 0, (n, v)
+          print("core database ok: %d episodes, %d views" % (n, v))
+          PY
+          python3 -m kilauea status --db data/kilauea_core.db
+
+      - name: Decompressing the core database leaves the tree clean
+        run: |
+          git diff --exit-code
+          dirty="$(git status --porcelain --untracked-files=all)"
+          if [ -n "$dirty" ]; then echo "$dirty"; exit 1; fi
