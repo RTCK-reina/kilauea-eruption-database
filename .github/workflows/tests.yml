@@ -34,10 +34,13 @@ jobs:
               + glob.glob("tests/*.py")
           )
           for f in files:
+              with open(f, encoding="utf-8") as fh:   # read outside the filter:
+                  src = fh.read()                     # a stray ResourceWarning
               with warnings.catch_warnings(record=True) as caught:
                   warnings.simplefilter("always")
-                  compile(open(f, encoding="utf-8").read(), f, "exec")
-                  bad += ["%s:%s %s" % (f, w.lineno, w.message) for w in caught]
+                  warnings.simplefilter("ignore", ResourceWarning)
+                  compile(src, f, "exec")
+              bad += ["%s:%s %s" % (f, w.lineno, w.message) for w in caught]
           if bad:
               raise SystemExit("\n".join(bad))
           print("%d files, no compile-time warnings" % len(files))
