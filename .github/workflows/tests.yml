@@ -62,6 +62,12 @@ jobs:
       - name: Unit tests
         run: python3 tests/test_parsing.py
 
+      - name: The shell scripts parse and answer --help
+        run: |
+          for f in scripts/*.sh; do bash -n "$f"; echo "ok $f"; done
+          scripts/cut_release.sh --help > /dev/null
+          test -x scripts/cut_release.sh || { echo "cut_release.sh is not executable"; exit 1; }
+
       - name: The shipped core database decompresses, opens and reports
         run: |
           gunzip -k data/kilauea_core.db.gz

@@ -8,6 +8,7 @@
     python -m kilauea validate             data integrity report
     python -m kilauea status               row counts and coverage
     python -m kilauea core-db              derive the shipped core database
+    python -m kilauea cache                what is in the raw download cache
 """
 from __future__ import annotations
 
@@ -17,7 +18,8 @@ import sqlite3
 import sys
 import time
 
-from . import baseline, brief, config, core, db, forecast, validate as validate_mod
+from . import (baseline, brief, cache as cache_mod, config, core, db, forecast,
+               report, validate as validate_mod)
 from .sources import (episodes, gnss, gravity, gvp, hans, park, plume, quakes,
                       so2, thermal, tilt, tilt_notice, vona)
 
@@ -151,9 +153,34 @@ def main(argv=None) -> int:
     cd.add_argument("--force", action="store_true",
                     help="overwrite the output if it already exists")
 
+    ca = sub.add_parser("cache", help="report on data/raw, the download cache")
+    ca.add_argument("--prune", action="store_true",
+                    help="delete interrupted downloads (*.part over an hour old)")
+    ca.add_argument("--prune-all", action="store_true",
+                    help="delete the whole cache; costs ~1 GB on the next full "
+                         "collection and nothing else")
+    ca.add_argument("--yes", action="store_true", help="skip the --prune-all prompt")
+
+    rn = sub.add_parser("release-notes", parents=[common],
+                        help="render the notes for a full-database release")
+    rn.add_argument("--tag", required=True, help="release tag, e.g. db-2026-08-23")
+    rn.add_argument("--repo", default="RTCK-reina/kilauea-eruption-database")
+    rn.add_argument("--full-sha", required=True,
+                    help="sha256 of the database being published")
+    rn.add_argument("--parts-dir", required=True,
+                    help="directory holding kilauea.db.gz.part* and SHA256SUMS.txt")
+    rn.add_argument("--core", default="data/kilauea_core.db",
+                    help="the core database derived from the same build")
+    rn.add_argument("-o", "--out", help="write here as well as to stdout")
+
     args = ap.parse_args(argv)
     _check_runtime()
     _setup_logging(args.verbose)
+
+    # The cache lives beside the database but does not need one open, and asking
+    # for a database that is not there would be a confusing way to refuse.
+    if args.cmd == "cache":
+        return _cache(args)
 
     from pathlib import Path
     db_path = getattr(args, "db", None)
@@ -236,6 +263,9 @@ def main(argv=None) -> int:
         if args.cmd == "core-db":
             return core.derive(conn, args.out, force=args.force)
 
+        if args.cmd == "release-notes":
+            return _release_notes(conn, args)
+
         if args.cmd == "validate":
             report = validate_mod.run(conn)
             print(validate_mod.render(report))
@@ -245,6 +275,63 @@ def main(argv=None) -> int:
         if not read_only:
             conn.execute("PRAGMA optimize")
         conn.close()
+    return 0
+
+
+def _cache(args) -> int:
+    if args.prune_all:
+        info = cache_mod.summary()
+        if not args.yes:
+            print(cache_mod.render(info))
+            print("\nRe-run with --yes to delete it.")
+            return 0
+        freed = cache_mod.prune_all()
+        print(f"removed the raw cache, {freed / 1048576:,.1f} MB freed")
+        return 0
+    if args.prune:
+        gone = cache_mod.prune_partials()
+        if not gone:
+            print("no interrupted downloads to remove")
+        for p in gone:
+            print(f"removed {p['path']} ({p['bytes'] / 1048576:,.1f} MB)")
+    print(cache_mod.render(cache_mod.summary()))
+    return 0
+
+
+def _release_notes(conn, args) -> int:
+    import hashlib
+    from pathlib import Path as _P
+
+    parts_dir = _P(args.parts_dir)
+    parts = sorted(parts_dir.glob("kilauea.db.gz.part*"))
+    if not parts:
+        raise SystemExit(f"no kilauea.db.gz.part* in {parts_dir}")
+    sums_file = parts_dir / "SHA256SUMS.txt"
+    if not sums_file.exists():
+        raise SystemExit(f"no SHA256SUMS.txt in {parts_dir}")
+
+    core_path = _P(args.core)
+    if not core_path.exists():
+        raise SystemExit(f"core database not found: {core_path}")
+    h = hashlib.sha256()
+    with open(core_path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+
+    text = report.release_notes(
+        conn,
+        tag=args.tag,
+        repo=args.repo,
+        full_sha=args.full_sha,
+        core_sha=h.hexdigest(),
+        full_bytes=_P(config.DB_PATH).stat().st_size,
+        gz_bytes=sum(p.stat().st_size for p in parts),
+        part_bytes=parts[0].stat().st_size,
+        part_sums=sums_file.read_text(encoding="utf-8"),
+    )
+    if args.out:
+        _P(args.out).write_text(text, encoding="utf-8")
+    print(text)
     return 0
 
 
@@ -283,12 +370,7 @@ def _record_brief(conn, ctx: dict) -> None:
 
 def print_status(conn) -> None:
     print(f"\ndatabase: {config.DB_PATH}")
-    rows = conn.execute("SELECT tbl, n, t0, t1 FROM v_coverage").fetchall()
-    width = max(len(r["tbl"]) for r in rows)
-    print(f"{'table'.ljust(width)}  {'rows':>12}  coverage")
-    for r in rows:
-        span = f"{r['t0'] or '-'} .. {r['t1'] or '-'}" if r["n"] else "(empty)"
-        print(f"{r['tbl'].ljust(width)}  {r['n']:>12,}  {span}")
+    print(report.coverage_table(conn))
 
     last = conn.execute(
         """SELECT source, status, started_at, rows_seen, rows_written, message

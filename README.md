@@ -13,6 +13,7 @@ python3 -m kilauea update          # daily incremental refresh
 python3 -m kilauea validate        # data integrity report
 python3 -m kilauea status          # row counts and time coverage
 python3 -m kilauea core-db         # derive the distributable core database
+python3 -m kilauea cache           # what is in the download cache, and what is safe to delete
 ```
 
 Requires Python 3.9+ and SQLite 3.28+. **No third-party packages**: the
@@ -44,18 +45,27 @@ deletes exactly two things, VACUUMs, and refuses to write the result unless
 every other table came through with its row count unchanged:
 
 ```
-python3 -m kilauea core-db --db data/kilauea.db -o data/kilauea_core.db --force
-gzip -9 -c data/kilauea_core.db > data/kilauea_core.db.gz
+scripts/cut_release.sh              # derive, compress, split, write the notes
+scripts/cut_release.sh --publish    # ... and upload the release
 ```
+
+`cut_release.sh` does the derivation and the release together on purpose: the
+committed archive and the release assets have to describe the same instant.
+It hashes the database before and after, aborts if a `daily_update.sh` run
+landed in the middle, and refuses to publish unless the refreshed archive is
+already committed and pushed — `gh release create` tags the current tip, so a
+release cut before the commit would ship the previous archive under notes
+claiming otherwise. The archive is written with `gzip -n`, so an unchanged
+database compresses to identical bytes and git records nothing.
 
 The two are `tilt_sample` in full, and the rows of `so2_emission` where
 `aggregation = 'individual' AND method = 'FLYSPEC array'` — the 10-second
 stream. The traverse and daily-mean SO2 figures stay, as does `tilt_hourly`.
-Refreshing the shipped archive means re-running those two commands, so the core
-build can never drift away from a full one by hand. Do it sparingly: the
-archive is a 38 MB binary and every refresh adds that much to the git history
-permanently. CI decompresses whatever is committed and opens it on every push,
-so a stale or corrupt archive fails the build rather than reaching a user.
+The core build can therefore never drift away from a full one by hand. Refresh
+it sparingly all the same: the archive is a 38 MB binary, and a refresh whose
+content genuinely changed adds that much to the git history permanently. CI
+decompresses whatever is committed and opens it on every push, so a stale or
+corrupt archive fails the build rather than reaching a user.
 
 ### The full database
 
@@ -272,6 +282,23 @@ table, extend `kilauea/sources/thermal.py`.
 
 ---
 
+## What is on disk
+
+`data/` is a few gigabytes and only one of the pieces is irreplaceable-ish:
+
+| Path | Size | If you delete it |
+|---|---|---|
+| `data/kilauea.db` | ~4.3 GB | rebuild with `collect all` (~40 min), or download the release |
+| `data/kilauea_core.db` | 172 MB | `gunzip -k data/kilauea_core.db.gz`, or `core-db` |
+| `data/kilauea_core.db.gz` | 38 MB | tracked in git |
+| `data/raw/` | ~380 MB | ~1 GB of downloads on the next `collect all` or `update --full` |
+| `data/digests/`, `briefs/`, `logs/` | small | regenerated; `daily_update.sh` already prunes them |
+
+`python3 -m kilauea cache` prints the same breakdown for `data/raw` with live
+numbers. `--prune` removes interrupted downloads — a `.part` file is never
+resumed, so one left by a dropped connection is dead weight — and `--prune-all`
+removes the cache entirely.
+
 ## Daily updates
 
 `scripts/daily_update.sh` refreshes the sources that actually change day to day
@@ -405,6 +432,7 @@ kilauea/
   sources/vona.py         aviation notices parsed from their telex format
   sources/park.py         NPS closures and eruption viewing
   sources/gnss.py         NGL daily GNSS positions (HTTPS only; port 80 is closed)
+scripts/cut_release.sh     derive the core archive and publish a full-database release
 scripts/daily_update.sh    database refresh + brief context (cron)
 scripts/daily_digest.py    standalone status report (no database)
 briefs/BRIEF_PROMPT.md     full specification for the HTML brief

@@ -516,6 +516,71 @@ def test_core_db_refuses_to_clobber_and_refuses_a_partial_build():
         partial.close()
 
 
+def test_cache_reports_and_prunes_only_stale_partials():
+    import tempfile
+    import time as _time
+    from kilauea import cache
+
+    with tempfile.TemporaryDirectory() as tmp:
+        root = os.path.join(tmp, "raw")
+        for group, payload in (("tilt", b"x" * 2048), ("so2", b"y" * 1024)):
+            os.makedirs(os.path.join(root, group))
+            with open(os.path.join(root, group, "a.zip"), "wb") as fh:
+                fh.write(payload)
+
+        stale = os.path.join(root, "tilt", "b.zip.part")
+        fresh = os.path.join(root, "so2", "c.zip.part")
+        for path in (stale, fresh):
+            with open(path, "wb") as fh:
+                fh.write(b"z" * 16)
+        old = _time.time() - 7200
+        os.utime(stale, (old, old))
+
+        info = cache.summary(root)
+        assert [g["name"] for g in info["groups"]] == ["so2", "tilt"], info["groups"]
+        assert info["total_bytes"] == 2048 + 1024 + 16 + 16, info["total_bytes"]
+        assert len(info["partials"]) == 2, info["partials"]
+        assert "raw download cache" in cache.render(info)
+
+        gone = cache.prune_partials(root)
+        assert [p["path"].name for p in gone] == ["b.zip.part"], gone
+        # A download that may still be running is left alone.
+        assert os.path.exists(fresh)
+        assert not os.path.exists(stale)
+
+        freed = cache.prune_all(root)
+        assert freed == cache.summary(root)["total_bytes"] + freed  # cache is empty now
+        assert cache.summary(root)["groups"] == []
+
+
+def test_release_notes_carry_the_checksums_and_the_coverage():
+    from kilauea import report
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.execute("CREATE TABLE cov (tbl TEXT, n INTEGER, t0 TEXT, t1 TEXT)")
+    conn.executemany("INSERT INTO cov VALUES (?, ?, ?, ?)", [
+        ("episode", 53, "2024-12-23T12:20:00Z", "2026-08-13T01:45:00Z"),
+        ("tilt_sample", 0, None, None),
+    ])
+    conn.execute("CREATE VIEW v_coverage AS SELECT * FROM cov")
+
+    table = report.coverage_table(conn)
+    assert "episode" in table and "(empty)" in table, table
+
+    notes = report.release_notes(
+        conn, tag="db-2026-08-23", repo="owner/repo",
+        full_sha="f" * 64, core_sha="c" * 64,
+        full_bytes=4_308_135_936, gz_bytes=592_112_724,
+        part_bytes=524_288_000, part_sums="abc  kilauea.db.gz.part00\n",
+    )
+    # The date comes out of the tag, so this checks the derivation too.
+    for needle in ("Snapshot taken 2026-08-23", "owner/repo", "f" * 64, "c" * 64,
+                   "4.31 GB", "592 MB", "500 MB parts", "kilauea.db.gz.part00",
+                   "episode"):
+        assert needle in notes, needle
+
+
 if __name__ == "__main__":
     failures = 0
     for name, fn in sorted(globals().items()):
