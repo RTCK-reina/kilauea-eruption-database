@@ -292,7 +292,8 @@ table, extend `kilauea/sources/thermal.py`.
 | `data/kilauea_core.db` | 172 MB | `gunzip -k data/kilauea_core.db.gz`, or `core-db` |
 | `data/kilauea_core.db.gz` | 38 MB | tracked in git |
 | `data/raw/` | ~380 MB | ~1 GB of downloads on the next `collect all` or `update --full` |
-| `data/digests/`, `briefs/`, `logs/` | small | regenerated; `daily_update.sh` already prunes them |
+| `briefs/`, `logs/` | small | regenerated; `daily_update.sh` prunes them at 60 and 30 days |
+| `data/digests/` | small | only ever written by `daily_digest.py -o`, which schedules nothing and prunes nothing; delete freely |
 
 `python3 -m kilauea cache` prints the same breakdown for `data/raw` with live
 numbers. `--prune` removes interrupted downloads — a `.part` file is never
