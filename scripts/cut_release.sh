@@ -43,8 +43,13 @@ done
 
 cd "$(dirname "$0")/.."
 TAG="${TAG:-db-$(date -u +%Y-%m-%d)}"
-WORK="${WORK:-$(mktemp -d -t kilauea-release)}"
-mkdir -p "$WORK"          # mktemp made its own; a --work directory may not exist
+if [ -n "$WORK" ]; then
+    OURS=0                # a directory the caller named is the caller's to keep
+    mkdir -p "$WORK"
+else
+    OURS=1
+    WORK=$(mktemp -d -t kilauea-release)
+fi
 ARCHIVE="$CORE.gz"
 
 step() { printf '\n== %s\n' "$*"; }
@@ -131,4 +136,8 @@ gh release create "$TAG" --repo "$REPO" \
    "$WORK"/kilauea.db.gz.part* "$WORK/SHA256SUMS.txt"
 gh release view "$TAG" --repo "$REPO" --json assets \
    -q '.assets[] | "  \(.name)  \(.size)  \(.state)"'
-rm -rf "$WORK"
+if [ "$OURS" = 1 ]; then
+    rm -rf "$WORK"
+else
+    printf '\n  assets and notes left in %s\n' "$WORK"
+fi
