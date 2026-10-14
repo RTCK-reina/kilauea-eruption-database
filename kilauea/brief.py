@@ -175,7 +175,26 @@ def extract_tilt(sections: dict, notice_id: str = "", sent_utc: str = "") -> dic
         hits = [r for r in readings if r["kind"] == kind]
         return hits[-1] if hits else None
 
-    cum = latest("inflation_cumulative")
+    # The Analysis section re-states earlier figures ("a peak inflation of 16
+    # microradians ... on September 16") after Summit Observations has given the
+    # current total, and one sentence can carry both: "the current total
+    # inflation ... is about 15.7 microradians, slightly less than the maximum
+    # of 16 microradians". Prefer the first µrad figure that follows a
+    # running-total keyword inside its own sentence; last-in-document order
+    # otherwise.
+    cum_hits = [r for r in readings if r["kind"] == "inflation_cumulative"]
+
+    def _states_total(r):
+        kw = re.search(r"current|total|since the end of",
+                       r["source_sentence"], re.I)
+        if not kw:
+            return False
+        m = re.search(r"(\d+(?:\.\d+)?)\s*(?:µrad|microradians?)",
+                      r["source_sentence"][kw.end():], re.I)
+        return bool(m) and float(m.group(1)) == r["magnitude_urad"]
+
+    cum = next((r for r in reversed(cum_hits) if _states_total(r)),
+               cum_hits[-1] if cum_hits else None)
     d24 = latest("change_24h")
     defl = latest("deflation_episode")
 
@@ -213,7 +232,8 @@ def extract_earthquakes(sections: dict) -> dict:
     for s in _sentences(scope):
         if "earthquake" not in s.lower():
             continue
-        if not re.search(r"(?:past|last)\s+24\s+hours|since yesterday", s, re.I):
+        if not re.search(r"(?:past|last)\s+24\s+hours|since yesterday|past\s+day\b",
+                         s, re.I):
             continue
         m = re.search(r"\b(?:were|was)\s+(?:only\s+)?(\d+|" + "|".join(_WORD_NUM) + r")\b",
                       s, re.I)

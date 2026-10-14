@@ -309,6 +309,57 @@ def test_tilt_notice_rejects_non_station_acronyms():
     assert all(r["station"] in (None, "UWD") for r in rows), [r["station"] for r in rows]
 
 
+# Modelled on the 2026-09-23 daily update: Analysis re-states the excursion
+# ("2.3 microradians lost") after Summit Observations gave the current total.
+_LATE_NOTICE = """Summit Observations:
+There were nine small earthquakes located across the summit region in the past
+day. Summit tilt has been relatively flat over the past day, with about 0.3
+microradians of deflation recorded since about 3:00 a.m. HST this morning. The
+current total inflation since the end of episode 54 is about 15.7 microradians,
+slightly less than the maximum of 16 microradians reached on September 16.
+
+Analysis:
+Since reaching a peak inflation of 16 microradians (UWD tilt post episode 54) on
+Wednesday September 16, the summit deflated about 2.3 microradians as the new
+lava flows ceased. Slow inflation (recorded on the UWD tiltmeter) started
+Thursday September 17 and had since recovered about 2.1 of the 2.3 microradians
+lost to the deflation event.
+"""
+
+
+def test_tilt_notice_signs_deflationary_24h_change():
+    """'0.3 microradians of deflation' over the past day is -0.3, not +0.3."""
+    from kilauea.sources import tilt_notice
+    rows = tilt_notice.extract("N3", "2026-09-23T18:23:22Z", _LATE_NOTICE)
+    d24 = [r for r in rows if r["kind"] == "change_24h"]
+    assert d24 and d24[0]["value_urad"] == -0.3, rows
+
+
+def test_tilt_notice_lost_amount_is_not_inflation():
+    """'the 2.3 microradians lost to the deflation event' is a loss re-stated."""
+    from kilauea.sources import tilt_notice
+    rows = tilt_notice.extract("N3", "2026-09-23T18:23:22Z", _LATE_NOTICE)
+    kinds = {(r["kind"], r["value_urad"]) for r in rows}
+    assert ("deflation_excursion", -2.3) in kinds, kinds
+    assert ("inflation_cumulative", 2.3) not in kinds, kinds
+
+
+def test_extract_tilt_prefers_the_running_total():
+    """The brief's cumulative is the 'current total' statement, not a peak recap."""
+    from kilauea import brief
+    t = brief.extract_tilt(brief.split_sections(_LATE_NOTICE),
+                           "N3", "2026-09-23T18:23:22Z")
+    assert t["cumulative_urad"]["value"] == 15.7, t["cumulative_urad"]
+    assert t["change_24h_urad"]["value"] == -0.3, t["change_24h_urad"]
+
+
+def test_earthquake_count_in_the_past_day():
+    """'nine small earthquakes ... in the past day' is a daily count."""
+    from kilauea import brief
+    sec = brief.split_sections(_LATE_NOTICE)
+    assert brief.extract_earthquakes(sec)["value"] == 9
+
+
 # --- VONA ----------------------------------------------------------------------
 
 _VONA = """VOLCANO OBSERVATORY NOTICE FOR AVIATION (VONA)

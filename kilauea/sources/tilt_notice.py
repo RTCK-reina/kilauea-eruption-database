@@ -98,7 +98,7 @@ def _attribute(stations: list[tuple[int, str]], pos: int) -> str | None:
     return stations[0][1] if stations else None
 
 
-def _classify(sentence: str, start: int, end: int) -> str | None:
+def _classify(sentence: str, start: int, end: int) -> tuple[str, bool] | None:
     """Decide what a given µrad figure measures, from the nearest keywords.
 
     A single HVO sentence routinely carries two figures with opposite meanings -
@@ -107,19 +107,35 @@ def _classify(sentence: str, start: int, end: int) -> str | None:
     whether a keyword appears *anywhere nearby* mislabels the second figure.
     Direction and framing are therefore both decided by whichever keyword sits
     closest to the number.
+
+    Returns ``(kind, deflationary)``. The direction-agnostic kinds
+    (``change_24h``, ``rate_per_day``) still carry ``deflationary`` so the
+    caller can sign them: a "0.3 microradians of deflation" 24-hour change is
+    -0.3, not +0.3.
     """
     mid = (start + end) // 2
-
-    # A rate ("less than 1 microradian per day") is not a cumulative amount.
     tail = sentence[end:end + 40]
-    if _RATE_RE.search(tail):
-        return "rate_per_day"
+
+    # "the 2.3 microradians lost to the deflation event" re-states a loss; the
+    # tail wins over keyword distance, otherwise "recovered ... 2.3" mines the
+    # excursion a second time as positive inflation.
+    lost_tail = bool(re.search(r"(?:µrad|microradians?)\s+(?:lost|loss)\b",
+                               tail, re.I))
 
     d_def = _nearest(_DEFLATION_RE, sentence, mid)
     d_inf = _nearest(_INFLATION_RE, sentence, mid)
     if d_def is None and d_inf is None:
+        deflationary = lost_tail
+    else:
+        deflationary = (lost_tail or d_inf is None
+                        or (d_def is not None and d_def <= d_inf))
+
+    # A rate ("less than 1 microradian per day") is not a cumulative amount.
+    if _RATE_RE.search(tail):
+        return "rate_per_day", deflationary
+
+    if d_def is None and d_inf is None and not lost_tail:
         return None
-    deflationary = d_inf is None or (d_def is not None and d_def <= d_inf)
 
     d_during = _nearest(_DURING_RE, sentence, mid)
     d_since = _nearest(_SINCE_RE, sentence, mid)
@@ -129,12 +145,12 @@ def _classify(sentence: str, start: int, end: int) -> str | None:
     # the closest framing and within reach of the number.
     if d_24h is not None and d_24h <= 90 and \
        (d_during is None or d_24h < d_during) and (d_since is None or d_24h < d_since):
-        return "change_24h"
+        return "change_24h", deflationary
 
     if deflationary:
         during_wins = d_during is not None and (d_since is None or d_during <= d_since)
-        return "deflation_episode" if during_wins else "deflation_excursion"
-    return "inflation_cumulative"
+        return ("deflation_episode" if during_wins else "deflation_excursion"), True
+    return "inflation_cumulative", False
 
 
 def extract(notice_id: str, sent_utc: str, body: str) -> list[dict]:
@@ -161,13 +177,14 @@ def extract(notice_id: str, sent_utc: str, body: str) -> list[dict]:
         stations = _station_positions(sentence)
         ep = _EPISODE_RE.search(sentence)
         for m in _NUM_RE.finditer(sentence):
-            kind = _classify(sentence, m.start("num"), m.end("num"))
-            if kind is None:
+            classified = _classify(sentence, m.start("num"), m.end("num"))
+            if classified is None:
                 continue
+            kind, deflationary = classified
             mag = float(m.group("num"))
             if mag <= 0 or mag > 200:      # guard against page furniture
                 continue
-            sign = -1.0 if kind.startswith("deflation") else 1.0
+            sign = -1.0 if deflationary else 1.0
             rows.append(dict(
                 notice_id=notice_id,
                 observed_utc=sent_utc,
